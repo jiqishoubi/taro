@@ -1,8 +1,10 @@
+import path from 'node:path'
+
 import { FRAMEWORK_MAP, SCRIPT_EXT } from '@tarojs/helper'
 import { defaults } from 'lodash'
-import path from 'path'
 
 import AppHelper from '../utils/app'
+import { componentConfig } from '../utils/component'
 import TaroComponentsExportsPlugin from './TaroComponentsExportsPlugin'
 
 import type { Func } from '@tarojs/taro/types/compile'
@@ -32,7 +34,9 @@ interface ITaroH5PluginOptions {
   prebundle?: boolean
   isBuildNativeComp?: boolean
   loaderMeta?: Record<string, string>
+  noInjectGlobalStyle?: boolean
 
+  modifyAppConfig?: Func
   onCompilerMake?: Func
   onParseCreateElement?: Func
 }
@@ -47,7 +51,7 @@ export default class TaroH5Plugin {
       sourceDir: '',
       routerConfig: {},
       entryFileName: 'app',
-      framework: FRAMEWORK_MAP.NERV,
+      framework: FRAMEWORK_MAP.REACT,
       frameworkExts: SCRIPT_EXT,
       runtimePath: [],
       pxTransformConfig: {
@@ -138,6 +142,7 @@ export default class TaroH5Plugin {
               pxTransformConfig: this.options.pxTransformConfig,
               alias: this.options.alias,
               defineConstants: this.options.defineConstants,
+              noInjectGlobalStyle: this.options.noInjectGlobalStyle,
               /** building mode */
               bootstrap,
               isBuildNativeComp
@@ -149,7 +154,9 @@ export default class TaroH5Plugin {
       })
     })
 
-    new TaroComponentsExportsPlugin(this.options).apply(compiler)
+    if (!componentConfig.includeAll) {
+      new TaroComponentsExportsPlugin(this.options).apply(compiler)
+    }
   }
 
   run () {

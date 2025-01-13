@@ -1,6 +1,4 @@
-import * as path from 'path'
-
-import type { NodePath, PluginItem } from '@babel/core'
+import type { NodePath, parse, PluginItem } from '@babel/core'
 
 /**
  * Inject `defineAppConfig` and `definePageConfig`
@@ -8,12 +6,13 @@ import type { NodePath, PluginItem } from '@babel/core'
  * without the need to specifically require them
  * if they are used
 */
-export function injectDefineConfigHeader (babel: any): PluginItem {
+export function injectDefineConfigHeader (babel: { parse: typeof parse }): PluginItem {
   const appConfig = 'function defineAppConfig(config) { return config }'
   const pageConfig = 'function definePageConfig(config) { return config }'
+  const importNative = "function importNativeComponent(path = '', name = '', exportName = '') { return name }"
 
   const prependHeader = (nodePath: NodePath<any>, header: string) => {
-    const parsedHeader = babel.parse(header, { filename: '' }).program.body[0]
+    const parsedHeader = babel.parse(header, { filename: '' })?.program.body[0]
     nodePath.node.body.unshift(parsedHeader)
   }
 
@@ -29,6 +28,9 @@ export function injectDefineConfigHeader (babel: any): PluginItem {
             return prependHeader(nodePath, appConfig)
           case 'definePageConfig':
             return prependHeader(nodePath, pageConfig)
+          case 'importNativeComponent':
+            return prependHeader(nodePath, importNative)
+          default:
         }
       }
     })
@@ -39,33 +41,4 @@ export function injectDefineConfigHeader (babel: any): PluginItem {
       Program: { enter: enterHandler }
     }
   }
-}
-
-export default function createBabelRegister ({ only }) {
-  require('@babel/register')({
-    only: Array.from(new Set([...only])),
-    presets: [
-      require.resolve('@babel/preset-env'),
-      require.resolve('@babel/preset-typescript')
-    ],
-    plugins: [
-      injectDefineConfigHeader,
-      [require.resolve('@babel/plugin-proposal-decorators'), {
-        legacy: true
-      }],
-      require.resolve('@babel/plugin-proposal-object-rest-spread'),
-      [require.resolve('@babel/plugin-transform-runtime'), {
-        corejs: false,
-        helpers: true,
-        regenerator: true,
-        useESModules: false,
-        version: '^7.7.7',
-        absoluteRuntime: path.resolve(__dirname, '..', 'node_modules/@babel/runtime')
-      }]
-    ],
-    extensions: ['.jsx', '.js', '.ts', '.tsx'],
-    babelrc: false,
-    configFile: false,
-    cache: false
-  })
 }
