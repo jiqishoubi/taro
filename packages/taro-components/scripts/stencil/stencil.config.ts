@@ -1,8 +1,10 @@
 import { Config } from '@stencil/core'
 import { OutputTarget } from '@stencil/core/internal'
-import { sass } from '@stencil/sass'
+import * as path from 'path'
+import externals from 'rollup-plugin-node-externals'
 
-import { reactOutputTarget, vue2OutputTarget, vue3OutputTarget } from './output-target'
+import { reactOutputTarget, solidOutputTarget, vue3OutputTarget } from './output-target'
+import scssPlugin from './plugin/sass-plugin'
 
 const isProd = process.env.NODE_ENV === 'production'
 const outputTargets: OutputTarget[] = [
@@ -11,25 +13,6 @@ const outputTargets: OutputTarget[] = [
     customElementsDir: 'dist/components',
     includeImportCustomElements: true,
     proxiesFile: '../taro-components-library-react/src/components.ts',
-  }),
-  vue2OutputTarget({
-    componentCorePackage: '@tarojs/components',
-    componentModels: [{
-      elements: ['taro-input-core', 'taro-textarea-core'],
-      targetAttr: 'value',
-      event: 'update:modelValue',
-    }, {
-      elements: ['taro-picker-core', 'taro-slider-core'],
-      targetAttr: 'value',
-      event: 'update:modelValue',
-    }, {
-      elements: ['taro-switch-core'],
-      targetAttr: 'checked',
-      event: 'update:modelValue',
-    }],
-    customElementsDir: 'dist/components',
-    includeImportCustomElements: true,
-    proxiesFile: '../taro-components-library-vue2/src/components.ts',
   }),
   vue3OutputTarget({
     componentCorePackage: '@tarojs/components',
@@ -50,12 +33,26 @@ const outputTargets: OutputTarget[] = [
     includeImportCustomElements: true,
     proxiesFile: '../taro-components-library-vue3/src/components.ts',
   }),
+  solidOutputTarget({
+    componentCorePackage: '@tarojs/components',
+    customElementsDir: 'dist/components',
+    includeImportCustomElements: true,
+    proxiesFile: '../taro-components-library-solid/src/components.ts',
+  }),
   {
     type: 'dist',
     esmLoaderPath: '../loader',
   },
   {
-    type: 'dist-custom-elements'
+    type: 'dist-custom-elements',
+    minify: isProd,
+    // inlineDynamicImports: true,
+    autoDefineCustomElements: false,
+    generateTypeDeclarations: false,
+  },
+  {
+    type: 'dist-hydrate-script',
+    dir: 'dist/hydrate',
   },
 ]
 
@@ -65,9 +62,15 @@ if (!isProd) {
 
 export const config: Config = {
   namespace: 'taro-components',
-  globalStyle: './src/global.css',
+  globalStyle: './src/styles/index.scss',
   plugins: [
-    sass()
+    scssPlugin({
+      injectGlobalPaths: [
+        'src/styles/base/fn',
+        'src/styles/base/variable/color',
+      ],
+      outputStyle: 'compressed',
+    }),
   ],
   sourceMap: !isProd,
   nodeResolve: {
@@ -85,7 +88,11 @@ export const config: Config = {
     { components: ['taro-swiper-core', 'taro-swiper-item-core'] },
     { components: ['taro-video-core', 'taro-video-control', 'taro-video-danmu'] }
   ],
-  buildEs5: 'prod',
+  /**
+   * Note: Taro内部有很多地方都直接引用了dist/components，最终的编译产物中有很多super()，导致低版安装白屏
+   * 为彻底解决此包导致的白屏问题，故暂不在包构建是转为es5，而是将此包加入到项目的babel编译中
+   */
+  // buildEs5: 'prod',
   /**
    * Note: 由于 Stencil 的获取 jest 依赖的方式，硬链接模式下仅可使用更目录依赖的版本，所以当前未将相关依赖置于 devDependencies 中声明。
    * 该问题可以通过为 pnpm 新增配置 `package-import-method: clone-or-copy` 修复，不过由于在 Mac 中，[NodeJS 存在问题问题](https://github.com/libuv/libuv/pull/2578)，
@@ -93,13 +100,6 @@ export const config: Config = {
    */
   testing: {
     globals: {
-      ENABLE_INNER_HTML: true,
-      ENABLE_ADJACENT_HTML: true,
-      ENABLE_SIZE_APIS: true,
-      ENABLE_TEMPLATE_CONTENT: true,
-      ENABLE_MUTATION_OBSERVER: true,
-      ENABLE_CLONE_NODE: true,
-      ENABLE_CONTAINS: true,
       'ts-jest': {
         diagnostics: false,
         tsconfig: {
@@ -110,10 +110,11 @@ export const config: Config = {
       }
     },
     moduleNameMapper: {
+      '@tarojs/taro': path.resolve(__dirname, '..', '..', 'packages/taro-h5/dist/index'),
       '(\\.(css|less|sass|scss))|weui': '<rootDir>/__mocks__/styleMock.js',
-      '\\.(gif|ttf|eot|svg)$': '<rootDir>/__mocks__/fileMock.js'
+      '\\.(gif|ttf|eot|svg)$': '<rootDir>/__mocks__/fileMock.js',
     },
-    setupFiles: ['<rootDir>/__tests__/setup.ts'],
+    setupFiles: ['<rootDir>/__mocks__/setup.ts'],
     testRegex: '(\\.|/)(e2e|spec|test|tt)\\.[jt]sx?$',
     // timers: 'fake',
     transform: {
@@ -127,13 +128,13 @@ export const config: Config = {
     }
   },
   rollupPlugins: {
-    after: [{
-      name: 'add-external',
-      options: opts => {
-        opts.external = [/^@tarojs[\\/][a-z]+/]
-
-        return opts
-      }
-    }]
+    before: [
+      externals({
+        deps: true,
+        devDeps: false,
+        include: [/^@tarojs[\\/][a-z]+/],
+        exclude: [/^@stencil[\\/][a-z]+/, 'classnames'],
+      }),
+    ]
   }
 }

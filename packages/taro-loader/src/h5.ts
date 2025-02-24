@@ -1,15 +1,16 @@
-import { readConfig } from '@tarojs/helper'
-import { AppConfig } from '@tarojs/taro'
-import { IH5Config } from '@tarojs/taro/types/compile'
-import { getOptions, stringifyRequest } from 'loader-utils'
-import { dirname, join, sep } from 'path'
+import { dirname, join, sep } from 'node:path'
+
+import { fs, readConfig } from '@tarojs/helper'
 
 import { REG_POST } from './constants'
+import { stringifyRequest } from './util'
 
+import type { AppConfig } from '@tarojs/taro'
+import type { IH5Config } from '@tarojs/taro/types/compile'
 import type * as webpack from 'webpack'
 
 function genResource (path: string, pages: Map<string, string>, loaderContext: webpack.LoaderContext<any>, syncFileName: string | false = false) {
-  const options = getOptions(loaderContext)
+  const options = loaderContext.getOptions()
   const stringify = (s: string): string => stringifyRequest(loaderContext, s)
   const importDependent = syncFileName ? 'require' : 'import'
   return `Object.assign({
@@ -22,11 +23,13 @@ function genResource (path: string, pages: Map<string, string>, loaderContext: w
 }
 
 export default function (this: webpack.LoaderContext<any>) {
-  const options = getOptions(this)
+  const options = this.getOptions()
+  const isProd = this.mode === 'production'
   const stringify = (s: string): string => stringifyRequest(this, s)
   const config: AppConfig & IH5Config = options.config
   const routerMode = config?.router?.mode || 'hash'
   const isBuildNativeComp = options.isBuildNativeComp
+  const noInjectGlobalStyle = options.noInjectGlobalStyle
   const isMultiRouterMode = routerMode === 'multi'
 
   const pathDirname = dirname(this.resourcePath)
@@ -45,10 +48,16 @@ export default function (this: webpack.LoaderContext<any>) {
   }, '')
 
   if (isBuildNativeComp) {
+    const globalStyleImportString = noInjectGlobalStyle ? '' : `import '@tarojs/components/global.css'\n`
     const compPath = join(pathDirname, options.filename)
-    return `import component from ${stringify(compPath)}
+    let code = `${setReconciler}
+import component from ${stringify(compPath)}
+${options.loaderMeta.importFrameworkStatement}
+${options.loaderMeta.extraImportForWeb}
+import { createH5NativeComponentConfig } from '${options.loaderMeta.creatorLocation}'
 import { initPxTransform } from '@tarojs/taro'
 ${setReconcilerPost}
+${globalStyleImportString}
 component.config = {}
 component.pxTransformConfig = {}
 Object.assign(component.config, ${JSON.stringify(readConfig(this.resourcePath))})
@@ -59,8 +68,26 @@ initPxTransform.call(component, {
   unitPrecision: ${pxTransformConfig.unitPrecision},
   targetUnit: ${JSON.stringify(pxTransformConfig.targetUnit)}
 })
-export default component`
+const config = component.config
+const nativeComponent = createH5NativeComponentConfig(component, ${options.loaderMeta.frameworkArgs})`
+
+    if (isProd) {
+      return code + `
+export default nativeComponent`
+    }
+
+    const mockDataRelativePath = './mock/mock.json'
+    const mockDataPath = join(this.context, mockDataRelativePath)
+    const hasMock = fs.existsSync(mockDataPath)
+    code += `
+const mockData = ${hasMock ? `require('${mockDataRelativePath}')` : '{}'};
+const reactElement = React.createElement(nativeComponent, mockData);
+ReactDOM.createRoot(document.getElementById("app")).render(reactElement);
+document.title = config.navigationBarTitleText || ''`
+
+    return code
   }
+
   if (options.bootstrap) return `import(${stringify(join(options.sourceDir, `${isMultiRouterMode ? pageName : options.entryFileName}.boot`))})`
 
   let tabBarCode = `var tabbarIconPath = []
@@ -87,10 +114,13 @@ config.pageName = "${pageName}"` : `config.routes = [
   ${config.pages?.map(path => genResource(path, pages, this)).join(',')}
 ]`
   const routerCreator = isMultiRouterMode ? 'createMultiRouter' : 'createRouter'
+  const historyCreator = routerMode === 'browser' ? 'createBrowserHistory' : routerMode === 'multi' ? 'createMpaHistory' : 'createHashHistory'
+  const appMountHandler = config.tabBar ? 'handleAppMountWithTabbar' : 'handleAppMount'
 
   const code = `${setReconciler}
 import { initPxTransform } from '@tarojs/taro'
-import { ${routerCreator} } from '@tarojs/router'
+import { ${routerCreator}, ${historyCreator}, ${appMountHandler} } from '@tarojs/router'
+import '@tarojs/components/global.css'
 import component from ${stringify(join(options.sourceDir, options.entryFileName))}
 import { window } from '@tarojs/runtime'
 import { ${options.loaderMeta.creator} } from '${options.loaderMeta.creatorLocation}'
@@ -115,7 +145,9 @@ if (config.tabBar) {
 ${routesConfig}
 ${options.loaderMeta.execBeforeCreateWebApp || ''}
 var inst = ${options.loaderMeta.creator}(component, ${options.loaderMeta.frameworkArgs})
-${routerCreator}(inst, config, ${options.loaderMeta.importFrameworkName})
+var history = ${historyCreator}({ window })
+${appMountHandler}(config, history)
+${routerCreator}(history, inst, config, ${options.loaderMeta.importFrameworkName})
 initPxTransform({
   designWidth: ${pxTransformConfig.designWidth},
   deviceRatio: ${JSON.stringify(pxTransformConfig.deviceRatio)},
